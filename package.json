@@ -1,0 +1,40 @@
+{
+  "name": "@hadron/hadrontool-webfetch",
+  "version": "0.1.0",
+  "description": "Hadron webfetch tool — stateless microservice that fetches web pages and calls HTTP APIs behind an SSRF-guarded, connection-pinned egress policy.",
+  "type": "module",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "express": "^4.21.0",
+    "sanitize-html": "^2.17.5",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2",
+    "undici": "^7.0.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.25",
+    "@types/node": "^22.0.0",
+    "@types/sanitize-html": "^2.16.1",
+    "@types/supertest": "^6.0.2",
+    "@types/turndown": "^5.0.6",
+    "@vitest/coverage-v8": "^4.0.18",
+    "supertest": "^7.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.0.18"
+  }
+}
