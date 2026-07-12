@@ -14,6 +14,9 @@
  * Every response envelope carries `source: "external"` where content from
  * the fetched resource is included — fetched content is untrusted input to
  * the LLM and core's framing wraps it accordingly.
+ *
+ * Spec: cor:web:000 (stateless; core owns authorization; no auto-retry of
+ * non-GET; fetched content is untrusted).
  */
 
 import { z } from 'zod';
@@ -47,6 +50,8 @@ const noControlChars = (v: string) => !HEADER_VALUE_INVALID_RE.test(v);
  * Headers a caller may never set directly: connection-structural ones (the
  * fetch layer owns them) plus credential carriers, which MUST come through
  * `auth` so the cross-origin redirect drop protects them.
+ *
+ * Spec: cor:web:010:02 (credentials only via the dedicated auth channel).
  */
 const FORBIDDEN_REQUEST_HEADERS = new Set([
   'host',
@@ -254,6 +259,7 @@ const httpRequest = defineOp(httpRequestSchema, async (deps, input) => {
       maxBytes: input.maxBytes ?? DEFAULT_MAX_BYTES,
       // Auto-replaying a body across a redirect hop is both a 307/303
       // correctness trap and a leak vector — only safe methods follow.
+      // Spec: cor:web:010:02 (non-GET never follows redirects).
       followRedirects: input.method === 'GET' || input.method === 'HEAD',
     },
     deps,
