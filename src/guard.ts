@@ -25,6 +25,8 @@ export const MAX_URL_CHARS = 2_000;
  * bypass shapes: decimal IPv4 literals arrive here already normalized by the
  * resolver, `[::1]` via the IPv6 branch, IPv4-mapped IPv6 via unwrapping,
  * and the cloud metadata endpoint via 169.254/16.
+ *
+ * Spec: cor:web:010:01 (deny-by-address-class — the classifier shared with core).
  */
 export function isForbiddenAddress(ip: string): boolean {
   const family = isIP(ip);
@@ -117,6 +119,7 @@ export function parseUrl(raw: string): URL {
   }
   // Userinfo (`https://user:pass@host`) is a credential channel that dodges
   // the `auth` field's cross-origin drop — force credentials through `auth`.
+  // Spec: cor:web:010:02 (credentials only via the dedicated auth channel).
   if (url.username !== '' || url.password !== '') {
     throw new ValidationError('url', 'credentials must be passed via the "auth" field, not embedded in the URL');
   }
@@ -137,6 +140,8 @@ export type Resolver = (hostname: string) => Promise<ResolvedAddress[]>;
  * address must be public — a mixed answer is exactly the rebinding trick
  * this guard exists for. The returned list feeds the pinned dispatcher; the
  * actual fetch never resolves DNS again.
+ *
+ * Spec: cor:web:010:01 (any-resolved-address rule; the pin set feeds the dispatcher).
  */
 export async function resolvePinned(url: URL, resolve: Resolver): Promise<ResolvedAddress[]> {
   // URL.hostname wraps IPv6 in brackets — strip for isIP/lookup.

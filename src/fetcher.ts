@@ -97,6 +97,7 @@ export const defaultDeps: FetcherDeps = {
     // The connection is pinned by overriding DNS at the socket layer: the
     // socket dials the pre-validated address while TLS SNI and the Host
     // header still carry the original hostname.
+    // Spec: cor:web:010:01 (connection pinning — no connect-time re-resolution).
     const agent = new Agent({
       connect: {
         lookup(_hostname, options, callback) {
@@ -199,6 +200,8 @@ function closePin(pin: PinnedDispatcher): void {
  * honors no AbortSignal, so a hostile/stalled resolver would otherwise stall
  * the request past the timeout — and each hop re-resolves. Racing the abort
  * keeps DNS inside the one budget the rest of the chain already respects.
+ *
+ * Spec: cor:web:010:01 (the total budget covers DNS resolution + the body read).
  */
 async function resolveWithBudget(
   url: URL,
@@ -282,6 +285,7 @@ export async function performFetch(req: FetchRequest, deps: FetcherDeps = defaul
       // cross-origin redirect must carry neither, because any caller header
       // can be a credential (x-api-key, x-auth-token, …) and would otherwise
       // leak to the redirect target.
+      // Spec: cor:web:010:02 (origin-scoped attach; drop credential + all headers cross-origin).
       const sameOrigin = url.origin === authOrigin;
       const headers: Record<string, string> = {
         'user-agent': USER_AGENT,
