@@ -32,13 +32,16 @@ const MAX_HEADER_VALUE_CHARS = 4_096;
 const MAX_EXTRA_HEADERS = 20;
 
 /**
- * A header value (or credential built into one) must never carry CR/LF/NUL —
- * the classic header-injection/smuggling shapes. undici also rejects these at
- * the socket, but the contract owns the check so it fails as validation_error
+ * Characters an HTTP header value (or credential built into one) may not
+ * carry: the whole C0 control range and DEL, minus HTAB (0x09), which
+ * RFC 7230 field-content permits. CR/LF/NUL are the classic injection shapes,
+ * but any control char (e.g. 0x01, 0x7f) is equally rejected by undici at the
+ * socket — owning the check here means all of them fail as validation_error
  * rather than an opaque fetch_failed.
  */
-const HEADER_VALUE_CTL_RE = /[\r\n\0]/;
-const noControlChars = (v: string) => !HEADER_VALUE_CTL_RE.test(v);
+// eslint-disable-next-line no-control-regex
+const HEADER_VALUE_INVALID_RE = /[\x00-\x08\x0a-\x1f\x7f]/;
+const noControlChars = (v: string) => !HEADER_VALUE_INVALID_RE.test(v);
 
 /**
  * Headers a caller may never set directly: connection-structural ones (the
@@ -64,12 +67,17 @@ const CREDENTIAL_HEADERS = new Set(['authorization', 'cookie']);
 const FETCH_URL_HEADER_ALLOWLIST = new Set(['accept', 'accept-language']);
 
 const authSchema: z.ZodType<AuthSpec> = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('bearer'), token: z.string().min(1).refine(noControlChars, 'invalid token') }).strict(),
+  z
+    .object({
+      type: z.literal('bearer'),
+      token: z.string().min(1).max(MAX_HEADER_VALUE_CHARS).refine(noControlChars, 'invalid token'),
+    })
+    .strict(),
   z
     .object({
       type: z.literal('basic'),
-      username: z.string().min(1).refine(noControlChars, 'invalid username'),
-      password: z.string().min(1).refine(noControlChars, 'invalid password'),
+      username: z.string().min(1).max(MAX_HEADER_VALUE_CHARS).refine(noControlChars, 'invalid username'),
+      password: z.string().min(1).max(MAX_HEADER_VALUE_CHARS).refine(noControlChars, 'invalid password'),
     })
     .strict(),
   z

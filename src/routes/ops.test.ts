@@ -193,6 +193,39 @@ describe('POST /ops/http-request', () => {
     expect(res.body.error).toBe('validation_error');
   });
 
+  it('rejects non-CRLF control chars in header values and auth material (validation, not fetch_failed)', async () => {
+    const { app: a, calls } = app(() => html(PAGE));
+    for (const payload of [
+      { headers: { 'x-inject': 'a\x01b' } }, // SOH
+      { headers: { 'x-inject': 'a\x7fb' } }, // DEL
+      { auth: { type: 'bearer', token: 'tok\x1fen' } }, // US in a credential
+    ]) {
+      const res = await request(a)
+        .post('/ops/http-request')
+        .set('authorization', `Bearer ${TOKEN}`)
+        .send({ method: 'GET', url: 'https://example.com/', ...payload })
+        .expect(400);
+      expect(res.body.error).toBe('validation_error');
+    }
+    // HTAB stays legal in a header value.
+    await request(a)
+      .post('/ops/http-request')
+      .set('authorization', `Bearer ${TOKEN}`)
+      .send({ method: 'GET', url: 'https://example.com/', headers: { 'x-ok': 'a\tb' } })
+      .expect(200);
+    expect(calls.length).toBe(1);
+  });
+
+  it('caps oversized credential material to bound memory', async () => {
+    const { app: a } = app(() => html(PAGE));
+    const res = await request(a)
+      .post('/ops/http-request')
+      .set('authorization', `Bearer ${TOKEN}`)
+      .send({ method: 'GET', url: 'https://example.com/', auth: { type: 'bearer', token: 'a'.repeat(5_000) } })
+      .expect(400);
+    expect(res.body.error).toBe('validation_error');
+  });
+
   it('rejects URL-embedded credentials without echoing the password', async () => {
     const { app: a, calls } = app(() => html(PAGE));
     const res = await request(a)

@@ -205,11 +205,13 @@ async function resolveWithBudget(
   resolve: Resolver,
   signal: AbortSignal,
 ): Promise<ResolvedAddress[]> {
-  if (signal.aborted) throw new FetchTimeoutError(TOTAL_TIMEOUT_MS / 1000);
   let onAbort: (() => void) | undefined;
   const aborted = new Promise<never>((_, reject) => {
     onAbort = () => reject(new FetchTimeoutError(TOTAL_TIMEOUT_MS / 1000));
-    signal.addEventListener('abort', onAbort, { once: true });
+    // Check inside the executor (mirrors readCapped): an abort already raised
+    // before we subscribe still rejects, with no gap to the addEventListener.
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
   });
   aborted.catch(() => {}); // pre-attach so a non-raced rejection is never unhandled
   try {
