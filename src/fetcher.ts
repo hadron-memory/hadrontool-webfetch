@@ -7,10 +7,12 @@
  * per hop. One AbortController budget covers the whole chain INCLUDING the
  * body read (the ms-exchange body-stall finding).
  *
- * Credential rules: the caller-supplied auth attaches only to hops whose
- * origin equals the ORIGINAL request's origin — a redirect that leaves the
- * origin proceeds without credentials. Non-GET/HEAD requests never follow
- * redirects (the 3xx is returned to the caller).
+ * Credential rules: the caller-supplied auth AND every caller-supplied
+ * header attach only to hops whose origin equals the ORIGINAL request's
+ * origin — a redirect that leaves the origin proceeds with neither. (Any
+ * header can be a credential — `x-api-key`, `x-auth-token` — so the plain
+ * header channel gets the same cross-origin drop as `auth`.) Non-GET/HEAD
+ * requests never follow redirects (the 3xx is returned to the caller).
  */
 
 import { lookup } from 'node:dns/promises';
@@ -193,6 +195,33 @@ function closePin(pin: PinnedDispatcher): void {
 }
 
 /**
+ * Resolve + validate the URL's host under the total budget. `dns.lookup`
+ * honors no AbortSignal, so a hostile/stalled resolver would otherwise stall
+ * the request past the timeout — and each hop re-resolves. Racing the abort
+ * keeps DNS inside the one budget the rest of the chain already respects.
+ */
+async function resolveWithBudget(
+  url: URL,
+  resolve: Resolver,
+  signal: AbortSignal,
+): Promise<ResolvedAddress[]> {
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(new FetchTimeoutError(TOTAL_TIMEOUT_MS / 1000));
+    // Check inside the executor (mirrors readCapped): an abort already raised
+    // before we subscribe still rejects, with no gap to the addEventListener.
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  });
+  aborted.catch(() => {}); // pre-attach so a non-raced rejection is never unhandled
+  try {
+    return await Promise.race([resolvePinned(url, resolve), aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
+
+/**
  * Read the body under the byte cap, racing the abort signal so a stalled
  * stream cannot outlive the total budget. Exceeding the cap TRUNCATES
  * (flagged), it does not error.
@@ -247,13 +276,17 @@ export async function performFetch(req: FetchRequest, deps: FetcherDeps = defaul
   const timer = setTimeout(() => controller.abort(), TOTAL_TIMEOUT_MS);
   try {
     for (let hop = 0; ; hop++) {
-      const addresses = await resolvePinned(url, deps.resolve);
+      const addresses = await resolveWithBudget(url, deps.resolve, controller.signal);
       const pin = deps.dispatcherFor(addresses);
+      // Caller headers AND credentials attach ONLY on the original origin — a
+      // cross-origin redirect must carry neither, because any caller header
+      // can be a credential (x-api-key, x-auth-token, …) and would otherwise
+      // leak to the redirect target.
+      const sameOrigin = url.origin === authOrigin;
       const headers: Record<string, string> = {
         'user-agent': USER_AGENT,
-        ...(req.headers ?? {}),
-        // Credentials attach ONLY on the original origin.
-        ...(url.origin === authOrigin ? authHeaders : {}),
+        ...(sameOrigin ? req.headers ?? {} : {}),
+        ...(sameOrigin ? authHeaders : {}),
       };
       if (req.body != null && req.contentType && headers['content-type'] == null) {
         headers['content-type'] = req.contentType;

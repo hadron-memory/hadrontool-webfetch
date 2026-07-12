@@ -72,9 +72,11 @@ not auto-retry non-GET requests**.
 ```
 
 Credentials are never logged, never echoed in errors, and are **dropped on
-any redirect that leaves the original origin**. They cannot be passed via
-plain `headers` (`authorization`/`cookie` are rejected there) — only via
-`auth`, so the origin-drop protection always applies.
+any redirect that leaves the original origin** — as is *every* caller-supplied
+`header`, since any header (`x-api-key`, `x-auth-token`, …) can carry a secret.
+Credentials cannot be passed via the URL (`user:pass@host` is rejected) or as
+`authorization`/`cookie` headers — only via `auth`. Header values may not
+contain control characters (CR/LF/NUL).
 
 ## Egress policy (SSRF defense)
 
@@ -85,7 +87,8 @@ are refused — the `cor:api:130:02` classifier, ported with its tests from
 hadron-server); the connection is then **pinned** to the validated addresses
 through a custom undici dispatcher lookup (SNI and Host keep the hostname),
 closing the DNS-rebinding TOCTOU; redirects re-run the full check per hop
-(max 3); one 30 s budget covers the whole chain *including the body read*;
+(max 3); one 30 s budget covers the whole chain *including DNS resolution and
+the body read*;
 response bodies are read streaming under a byte cap (truncate + flag, default
 2 MB, hard cap 5 MB); only textual content types are returned.
 

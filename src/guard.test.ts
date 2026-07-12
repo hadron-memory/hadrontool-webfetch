@@ -96,6 +96,12 @@ describe('parseUrl', () => {
     expect(() => parseUrl('not a url')).toThrowError(ValidationError);
     expect(() => parseUrl(`https://example.com/${'x'.repeat(2100)}`)).toThrowError(ValidationError);
   });
+
+  it('rejects URL-embedded credentials (userinfo) — auth must go via the auth field', () => {
+    expect(() => parseUrl('https://user:pass@example.com/')).toThrowError(ValidationError);
+    expect(() => parseUrl('https://user@example.com/')).toThrowError(ValidationError);
+    expect(parseUrl('https://example.com/').username).toBe('');
+  });
 });
 
 describe('resolvePinned', () => {
