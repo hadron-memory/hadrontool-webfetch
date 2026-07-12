@@ -193,14 +193,18 @@ describe('POST /ops/http-request', () => {
     expect(res.body.error).toBe('validation_error');
   });
 
-  it('rejects URL-embedded credentials', async () => {
-    const { app: a } = app(() => html(PAGE));
+  it('rejects URL-embedded credentials without echoing the password', async () => {
+    const { app: a, calls } = app(() => html(PAGE));
     const res = await request(a)
       .post('/ops/http-request')
       .set('authorization', `Bearer ${TOKEN}`)
-      .send({ method: 'GET', url: 'https://user:pass@example.com/' })
+      .send({ method: 'GET', url: 'https://user:sup3r-sekrit@example.com/' })
       .expect(400);
     expect(res.body.error).toBe('validation_error');
+    // Rejected at validation, so the URL never reaches undici (whose error
+    // message would echo the full URL, incl. the password, via fetch_failed).
+    expect(calls.length).toBe(0);
+    expect(JSON.stringify(res.body)).not.toContain('sup3r-sekrit');
   });
 
   it('rejects credentials smuggled through plain headers', async () => {
