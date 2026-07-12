@@ -32,6 +32,15 @@ const MAX_HEADER_VALUE_CHARS = 4_096;
 const MAX_EXTRA_HEADERS = 20;
 
 /**
+ * A header value (or credential built into one) must never carry CR/LF/NUL —
+ * the classic header-injection/smuggling shapes. undici also rejects these at
+ * the socket, but the contract owns the check so it fails as validation_error
+ * rather than an opaque fetch_failed.
+ */
+const HEADER_VALUE_CTL_RE = /[\r\n\0]/;
+const noControlChars = (v: string) => !HEADER_VALUE_CTL_RE.test(v);
+
+/**
  * Headers a caller may never set directly: connection-structural ones (the
  * fetch layer owns them) plus credential carriers, which MUST come through
  * `auth` so the cross-origin redirect drop protects them.
@@ -55,8 +64,14 @@ const CREDENTIAL_HEADERS = new Set(['authorization', 'cookie']);
 const FETCH_URL_HEADER_ALLOWLIST = new Set(['accept', 'accept-language']);
 
 const authSchema: z.ZodType<AuthSpec> = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('bearer'), token: z.string().min(1) }).strict(),
-  z.object({ type: z.literal('basic'), username: z.string().min(1), password: z.string().min(1) }).strict(),
+  z.object({ type: z.literal('bearer'), token: z.string().min(1).refine(noControlChars, 'invalid token') }).strict(),
+  z
+    .object({
+      type: z.literal('basic'),
+      username: z.string().min(1).refine(noControlChars, 'invalid username'),
+      password: z.string().min(1).refine(noControlChars, 'invalid password'),
+    })
+    .strict(),
   z
     .object({
       type: z.literal('header'),
@@ -64,7 +79,7 @@ const authSchema: z.ZodType<AuthSpec> = z.discriminatedUnion('type', [
         .string()
         .regex(HEADER_NAME_RE, 'invalid header name')
         .refine((n) => !FORBIDDEN_REQUEST_HEADERS.has(n.toLowerCase()), 'this header cannot carry a credential'),
-      value: z.string().min(1).max(MAX_HEADER_VALUE_CHARS),
+      value: z.string().min(1).max(MAX_HEADER_VALUE_CHARS).refine(noControlChars, 'invalid header value'),
     })
     .strict(),
 ]);
@@ -96,6 +111,9 @@ function normalizeHeaders(
     }
     if (value.length > MAX_HEADER_VALUE_CHARS) {
       throw new ValidationError('headers', `header "${name}" value exceeds ${MAX_HEADER_VALUE_CHARS} characters`);
+    }
+    if (!noControlChars(value)) {
+      throw new ValidationError('headers', `header "${name}" value contains invalid characters`);
     }
     out[name] = value;
   }

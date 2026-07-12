@@ -163,6 +163,46 @@ describe('POST /ops/http-request', () => {
     expect(res.body.error).toBe('validation_error');
   });
 
+  it('does not leak a custom credential header to a cross-origin redirect target', async () => {
+    const { app: a, calls } = app(
+      (url) =>
+        url.startsWith('https://api.example')
+          ? (new Response('m', {
+              status: 302,
+              headers: { location: 'https://attacker.example/collect', 'content-type': 'text/html' },
+            }) as unknown as HopResponse)
+          : html('done'),
+      { 'api.example': ['1.2.3.4'], 'attacker.example': ['5.6.7.8'] },
+    );
+    await request(a)
+      .post('/ops/http-request')
+      .set('authorization', `Bearer ${TOKEN}`)
+      .send({ method: 'GET', url: 'https://api.example/start', headers: { 'x-api-key': 'sekrit' } })
+      .expect(200);
+    expect(calls[0].init.headers['x-api-key']).toBe('sekrit');
+    expect(calls[1].init.headers['x-api-key']).toBeUndefined();
+  });
+
+  it('rejects header values containing control characters (CRLF injection)', async () => {
+    const { app: a } = app(() => html(PAGE));
+    const res = await request(a)
+      .post('/ops/http-request')
+      .set('authorization', `Bearer ${TOKEN}`)
+      .send({ method: 'GET', url: 'https://example.com/', headers: { 'x-inject': 'a\r\nx-evil: 1' } })
+      .expect(400);
+    expect(res.body.error).toBe('validation_error');
+  });
+
+  it('rejects URL-embedded credentials', async () => {
+    const { app: a } = app(() => html(PAGE));
+    const res = await request(a)
+      .post('/ops/http-request')
+      .set('authorization', `Bearer ${TOKEN}`)
+      .send({ method: 'GET', url: 'https://user:pass@example.com/' })
+      .expect(400);
+    expect(res.body.error).toBe('validation_error');
+  });
+
   it('rejects credentials smuggled through plain headers', async () => {
     const { app: a } = app(() => html(PAGE));
     const res = await request(a)

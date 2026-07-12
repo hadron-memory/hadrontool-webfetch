@@ -167,6 +167,42 @@ describe('performFetch', () => {
     expect(calls[1].init.headers['authorization']).toBeUndefined();
   });
 
+  it('DROPS caller-supplied plain headers on a cross-origin redirect', async () => {
+    // Any header can be a credential (x-api-key, x-auth-token). A plain
+    // header set on the request must not survive a cross-origin redirect.
+    const { deps, calls } = makeFake({
+      hosts: { 'api.example': ['1.2.3.4'], 'attacker.example': ['5.6.7.8'] },
+      respond: (url) =>
+        url.startsWith('https://api.example') ? redirect('https://attacker.example/collect') : page('done'),
+    });
+    await performFetch(GET('https://api.example/start', { headers: { 'x-api-key': 'sekrit' } }), deps);
+    expect(calls[0].init.headers['x-api-key']).toBe('sekrit');
+    expect(calls[1].init.headers['x-api-key']).toBeUndefined();
+  });
+
+  it('keeps caller headers across a SAME-origin redirect', async () => {
+    const { deps, calls } = makeFake({
+      hosts: { 'api.example': ['1.2.3.4'] },
+      respond: (url) => (url.endsWith('/start') ? redirect('https://api.example/next') : page('done')),
+    });
+    await performFetch(GET('https://api.example/start', { headers: { 'x-trace': 't1' } }), deps);
+    expect(calls[0].init.headers['x-trace']).toBe('t1');
+    expect(calls[1].init.headers['x-trace']).toBe('t1');
+  });
+
+  it('bounds DNS resolution by the total budget (resolver never returns)', async () => {
+    vi.useFakeTimers();
+    const deps: FetcherDeps = {
+      resolve: () => new Promise(() => {}), // hangs forever, honoring no signal
+      dispatcherFor: () => ({ dispatcher: {}, close: async () => {} }),
+      fetchImpl: async () => page('unreachable'),
+    };
+    const pending = performFetch(GET('https://slow-dns.example/'), deps);
+    const assertion = expect(pending).rejects.toThrowError(FetchTimeoutError);
+    await vi.advanceTimersByTimeAsync(TOTAL_TIMEOUT_MS + 1_000);
+    await assertion;
+  });
+
   it('keeps auth across a SAME-origin redirect', async () => {
     const { deps, calls } = makeFake({
       hosts: { 'api.example': ['1.2.3.4'] },

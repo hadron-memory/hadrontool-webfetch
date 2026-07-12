@@ -115,6 +115,11 @@ export function parseUrl(raw: string): URL {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new ValidationError('url', `unsupported URL scheme "${url.protocol}" — only http and https are allowed`);
   }
+  // Userinfo (`https://user:pass@host`) is a credential channel that dodges
+  // the `auth` field's cross-origin drop — force credentials through `auth`.
+  if (url.username !== '' || url.password !== '') {
+    throw new ValidationError('url', 'credentials must be passed via the "auth" field, not embedded in the URL');
+  }
   return url;
 }
 
