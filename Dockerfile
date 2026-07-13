@@ -27,7 +27,7 @@ ENV NODE_ENV=production \
 # build would fail with `tsc: not found`.
 COPY package.json package-lock.json ./
 RUN npm ci --include=dev
-COPY tsconfig.json ./
+COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
