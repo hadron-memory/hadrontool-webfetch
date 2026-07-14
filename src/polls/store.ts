@@ -81,7 +81,14 @@ export type PollJobPatch = Partial<
 
 export interface PollStore {
   create(job: NewPollJob): Promise<PollJob>;
+  /**
+   * Create iff the org is under `maxActive` active jobs — atomically, so
+   * concurrent creations (or replicas) cannot overshoot the cap. Returns
+   * null when the cap is hit.
+   */
+  createCapped(job: NewPollJob, maxActive: number): Promise<PollJob | null>;
   get(id: string): Promise<PollJob | null>;
+  /** Most recent first; implementations cap the result (currently 100). */
   listByOrg(orgId: string): Promise<PollJob[]>;
   countActiveByOrg(orgId: string): Promise<number>;
   update(id: string, patch: PollJobPatch): Promise<PollJob | null>;
@@ -91,12 +98,20 @@ export interface PollStore {
    * returned; concurrent claimers never receive the same job.
    */
   claimDue(now: Date, leaseMs: number, limit: number): Promise<PollJob[]>;
+  /**
+   * Atomically claim ONE job regardless of nextRunAt (the forced-run path):
+   * succeeds iff the job is active and not currently leased. Null = missing,
+   * not active, or leased — the caller distinguishes via get().
+   */
+  claimOne(id: string, now: Date, leaseMs: number): Promise<PollJob | null>;
 }
 
 /** In-memory store for the test suite (and dev without a database). */
 export class InMemoryPollStore implements PollStore {
   private jobs = new Map<string, PollJob>();
   private seq = 0;
+
+  constructor(private readonly now: () => Date = () => new Date()) {}
 
   async create(job: NewPollJob): Promise<PollJob> {
     const full: PollJob = {
@@ -111,10 +126,16 @@ export class InMemoryPollStore implements PollStore {
       triggerCount: 0,
       consecutiveFailures: 0,
       leaseUntil: null,
-      createdAt: new Date(job.nextRunAt),
+      createdAt: this.now(),
     };
     this.jobs.set(full.id, full);
     return { ...full };
+  }
+
+  async createCapped(job: NewPollJob, maxActive: number): Promise<PollJob | null> {
+    // Single-threaded: count-then-insert is atomic by construction here.
+    if ((await this.countActiveByOrg(job.orgId)) >= maxActive) return null;
+    return this.create(job);
   }
 
   async get(id: string): Promise<PollJob | null> {
@@ -149,5 +170,13 @@ export class InMemoryPollStore implements PollStore {
       .slice(0, limit);
     for (const j of due) j.leaseUntil = new Date(now.getTime() + leaseMs);
     return due.map((j) => ({ ...j }));
+  }
+
+  async claimOne(id: string, now: Date, leaseMs: number): Promise<PollJob | null> {
+    const job = this.jobs.get(id);
+    if (!job || job.status !== 'active') return null;
+    if (job.leaseUntil !== null && job.leaseUntil.getTime() >= now.getTime()) return null;
+    job.leaseUntil = new Date(now.getTime() + leaseMs);
+    return { ...job };
   }
 }

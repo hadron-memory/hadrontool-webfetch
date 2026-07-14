@@ -88,7 +88,14 @@ export function pollsRouter(service: PollServiceDeps, scheduler: SchedulerDeps):
         res.status(409).json({ error: 'poll_not_active', message: `Job is ${job.status}.` });
         return;
       }
-      await tick(scheduler, job);
+      // Claim through the same lease the scheduler uses — a forced run must
+      // never tick a job the loop is concurrently processing.
+      const claimed = await service.store.claimOne(job.id, scheduler.now(), 60_000);
+      if (!claimed) {
+        res.status(409).json({ error: 'poll_leased', message: 'The scheduler is currently processing this job.' });
+        return;
+      }
+      await tick(scheduler, claimed);
       const after = await service.store.get(req.params.id);
       res.json({ ok: true, job: after ? toView(after) : null });
     } catch (err) {

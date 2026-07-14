@@ -15,7 +15,7 @@
 import { z } from 'zod';
 import { ValidationError } from '../errors.js';
 import { parseUrl, resolvePinned, type Resolver } from '../guard.js';
-import { conditionsSchema, modeSchema, validateConditions } from '../evaluate.js';
+import { conditionsSchema, modeSchema, requiredKind, validateConditions } from '../evaluate.js';
 import { authSchema, FETCH_URL_HEADER_ALLOWLIST, normalizeHeaders } from '../ops/index.js';
 import type { CredentialCipher } from './crypto.js';
 import type { NewPollJob, PollJob, PollStore } from './store.js';
@@ -100,6 +100,13 @@ export async function createPoll(deps: PollServiceDeps, raw: Record<string, unkn
   const input = createPollSchema.parse(raw);
   validateConditions(input.conditions);
 
+  // An explicit kind conflicting with the conditions would make every tick
+  // fail until the job dies — reject at creation, like evaluate-url does.
+  const forced = requiredKind(input.conditions);
+  if (input.contentKind !== 'auto' && forced !== undefined && forced !== input.contentKind) {
+    throw new ValidationError('contentKind', `these conditions require ${forced} content`);
+  }
+
   const { limits } = deps;
   if (input.intervalSeconds < limits.minIntervalSeconds) {
     throw new ValidationError('intervalSeconds', `the interval floor is ${limits.minIntervalSeconds}s`);
@@ -109,11 +116,6 @@ export async function createPoll(deps: PollServiceDeps, raw: Record<string, unkn
   }
   if (input.firePolicy === 'cooldown' && input.cooldownSeconds === undefined) {
     throw new ValidationError('cooldownSeconds', 'firePolicy "cooldown" requires cooldownSeconds');
-  }
-
-  const active = await deps.store.countActiveByOrg(input.orgId);
-  if (active >= limits.maxActivePerOrg) {
-    throw new ValidationError('orgId', `the organization already has ${active} active polls (cap ${limits.maxActivePerOrg})`);
   }
 
   // Fail fast: a forbidden target never becomes a job. Throws url_forbidden /
@@ -143,7 +145,12 @@ export async function createPoll(deps: PollServiceDeps, raw: Record<string, unkn
     nextRunAt: now,
     status: 'active',
   };
-  return toView(await deps.store.create(job));
+  // The cap check lives INSIDE the store so it is atomic under concurrency.
+  const created = await deps.store.createCapped(job, limits.maxActivePerOrg);
+  if (created === null) {
+    throw new ValidationError('orgId', `the organization is at its cap of ${limits.maxActivePerOrg} active polls`);
+  }
+  return toView(created);
 }
 
 export async function cancelPoll(deps: PollServiceDeps, id: string): Promise<PollJobView | null> {

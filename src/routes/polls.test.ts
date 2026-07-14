@@ -86,8 +86,18 @@ describe('POST /polls', () => {
     expect(res.body.reason).toContain('30 days');
     await post(app, '/polls', CREATE).expect(201);
     await post(app, '/polls', CREATE).expect(201);
-    res = await post(app, '/polls', CREATE).expect(400); // cap = 2
-    expect(res.body.reason).toContain('cap 2');
+    res = await post(app, '/polls', CREATE).expect(400); // cap = 2, enforced atomically in the store
+    expect(res.body.reason).toContain('cap of 2');
+  });
+
+  it('rejects an explicit contentKind that conflicts with the conditions', async () => {
+    const { app } = pollsApp();
+    const res = await post(app, '/polls', {
+      ...CREATE,
+      contentKind: 'json',
+      conditions: [{ id: 's', type: 'selector_exists', selector: 'h1' }],
+    }).expect(400);
+    expect(res.body.field).toBe('contentKind');
   });
 
   it('refuses a guard-forbidden target at creation (fail fast)', async () => {
@@ -136,6 +146,15 @@ describe('read, cancel, run', () => {
     const res = await post(app, `/polls/${id}/run`).expect(200);
     expect(res.body.job.lastCheckedAt).not.toBeNull();
     expect(res.body.job.lastStatus).toBe(200);
+  });
+
+  it('POST /polls/:id/run 409s while the scheduler holds the lease', async () => {
+    const { app, store } = pollsApp();
+    const created = await post(app, '/polls', CREATE).expect(201);
+    const id = created.body.job.jobId;
+    await store.update(id, { leaseUntil: new Date('2026-07-14T12:00:30Z') }); // scheduler mid-tick
+    const res = await post(app, `/polls/${id}/run`).expect(409);
+    expect(res.body.error).toBe('poll_leased');
   });
 
   it('the polls plane is absent when not configured', async () => {

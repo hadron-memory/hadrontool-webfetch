@@ -73,6 +73,9 @@ export function startScheduler(deps: SchedulerDeps, everyMs = 5_000): () => void
     running = true;
     try {
       await runDueOnce(deps);
+    } catch (err) {
+      // A store/claim error must never become an unhandled rejection.
+      logger.error('scheduler loop failed', { err: String((err as Error)?.message ?? err).slice(0, 200) });
     } finally {
       running = false;
     }
@@ -216,14 +219,20 @@ function nextRun(deps: SchedulerDeps, job: PollJob, now: Date): Date {
   return new Date(now.getTime() + Math.round(job.intervalSeconds * 1_000 * jitter));
 }
 
-/** Backoff + failure limit; the limit terminates with a best-effort poll.failed. */
-async function recordFailure(deps: SchedulerDeps, job: PollJob, err: unknown): Promise<void> {
+/**
+ * Backoff + failure limit; the limit terminates with a best-effort
+ * poll.failed. `limitless` retries forever (capped backoff, no limit) — used
+ * for an expired job's terminal-event delivery, where giving up would let
+ * core permanently miss poll.expired (the job is inert by then: no fetches,
+ * one delivery attempt per backoff).
+ */
+async function recordFailure(deps: SchedulerDeps, job: PollJob, err: unknown, limitless = false): Promise<void> {
   const now = deps.now();
   const failures = job.consecutiveFailures + 1;
   const code = err instanceof WebfetchToolError ? err.code : 'internal_error';
   logger.warn('poll tick error', { jobId: job.id, code, failures });
 
-  if (failures >= deps.failureLimit) {
+  if (!limitless && failures >= deps.failureLimit) {
     await terminate(deps, job, 'failed', { kind: 'poll.failed', errorCode: code }, /* bestEffort */ true);
     return;
   }
@@ -264,7 +273,9 @@ async function terminate(
     } as PollEvent);
   } catch (err) {
     if (!bestEffort) {
-      await recordFailure(deps, job, err);
+      // Retry the terminal event forever — never downgrade an expiry into a
+      // failure-limit poll.failed (core would permanently miss poll.expired).
+      await recordFailure(deps, job, err, /* limitless */ true);
       return;
     }
     logger.error('terminal poll event undeliverable', {

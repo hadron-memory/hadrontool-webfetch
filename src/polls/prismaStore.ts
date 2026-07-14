@@ -51,32 +51,48 @@ function json(value: unknown): Prisma.InputJsonValue | undefined {
   return value === undefined || value === null ? undefined : (value as Prisma.InputJsonValue);
 }
 
+function toCreateData(job: NewPollJob): Prisma.WebFetchPollJobCreateInput {
+  return {
+    orgId: job.orgId,
+    appId: job.appId,
+    url: job.url,
+    contentKind: job.contentKind,
+    conditions: job.conditions as unknown as Prisma.InputJsonValue,
+    mode: job.mode,
+    headersJson: json(job.headers),
+    intervalSeconds: job.intervalSeconds,
+    expiresAt: job.expiresAt,
+    firePolicy: job.firePolicy,
+    cooldownSeconds: job.cooldownSeconds,
+    authCiphertext: job.authCiphertext,
+    authKeyId: job.authKeyId,
+    credentialsNodeUrn: job.credentialsNodeUrn,
+    urlPrefix: job.urlPrefix,
+    nextRunAt: job.nextRunAt,
+    status: job.status,
+  };
+}
+
+const LIST_LIMIT = 100;
+
 export class PrismaPollStore implements PollStore {
   constructor(private readonly prisma: PrismaClient = new PrismaClient()) {}
 
   async create(job: NewPollJob): Promise<PollJob> {
-    const row = await this.prisma.webFetchPollJob.create({
-      data: {
-        orgId: job.orgId,
-        appId: job.appId,
-        url: job.url,
-        contentKind: job.contentKind,
-        conditions: job.conditions as unknown as Prisma.InputJsonValue,
-        mode: job.mode,
-        headersJson: json(job.headers),
-        intervalSeconds: job.intervalSeconds,
-        expiresAt: job.expiresAt,
-        firePolicy: job.firePolicy,
-        cooldownSeconds: job.cooldownSeconds,
-        authCiphertext: job.authCiphertext,
-        authKeyId: job.authKeyId,
-        credentialsNodeUrn: job.credentialsNodeUrn,
-        urlPrefix: job.urlPrefix,
-        nextRunAt: job.nextRunAt,
-        status: job.status,
-      },
-    });
+    const row = await this.prisma.webFetchPollJob.create({ data: toCreateData(job) });
     return toDomain(row);
+  }
+
+  async createCapped(job: NewPollJob, maxActive: number): Promise<PollJob | null> {
+    // Serialize per-org creations with a transaction-scoped advisory lock so
+    // concurrent requests (or replicas) can't both pass the count check.
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${job.orgId}))`;
+      const active = await tx.webFetchPollJob.count({ where: { orgId: job.orgId, status: 'active' } });
+      if (active >= maxActive) return null;
+      const row = await tx.webFetchPollJob.create({ data: toCreateData(job) });
+      return toDomain(row);
+    });
   }
 
   async get(id: string): Promise<PollJob | null> {
@@ -85,7 +101,11 @@ export class PrismaPollStore implements PollStore {
   }
 
   async listByOrg(orgId: string): Promise<PollJob[]> {
-    const rows = await this.prisma.webFetchPollJob.findMany({ where: { orgId }, orderBy: { createdAt: 'desc' } });
+    const rows = await this.prisma.webFetchPollJob.findMany({
+      where: { orgId },
+      orderBy: { createdAt: 'desc' },
+      take: LIST_LIMIT,
+    });
     return rows.map(toDomain);
   }
 
@@ -129,5 +149,18 @@ export class PrismaPollStore implements PollStore {
     if (claimed.length === 0) return [];
     const rows = await this.prisma.webFetchPollJob.findMany({ where: { id: { in: claimed.map((r) => r.id) } } });
     return rows.map(toDomain);
+  }
+
+  async claimOne(id: string, now: Date, leaseMs: number): Promise<PollJob | null> {
+    const claimed = await this.prisma.webFetchPollJob.updateMany({
+      where: {
+        id,
+        status: 'active',
+        OR: [{ leaseUntil: null }, { leaseUntil: { lt: now } }],
+      },
+      data: { leaseUntil: new Date(now.getTime() + leaseMs) },
+    });
+    if (claimed.count === 0) return null;
+    return this.get(id);
   }
 }

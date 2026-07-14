@@ -62,6 +62,8 @@ export function createEventForwarder(options: ForwarderOptions): EventForwarder 
     } catch (err) {
       throw new EventDeliveryError(String((err as Error)?.message ?? err).slice(0, 200));
     }
+    // Drain the body (even on errors) so undici returns the socket to the pool.
+    await response.text().catch(() => {});
     if (response.status < 200 || response.status >= 300) {
       throw new EventDeliveryError(`core responded ${response.status}`);
     }

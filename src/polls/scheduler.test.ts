@@ -230,6 +230,29 @@ describe('expiry', () => {
     expect(h.events.map((e) => e.kind)).toEqual(['poll.expired']);
     expect(h.calls).toHaveLength(0); // expiry never fetches
   });
+
+  it('retries poll.expired past the failure limit — never downgrades to poll.failed', async () => {
+    let coreUp = false;
+    const h = harness({
+      deliver: async () => {
+        if (!coreUp) throw new Error('core down');
+      },
+      failureLimit: 3,
+    });
+    const job = await h.store.create(h.newJob({ expiresAt: new Date(h.deps.now().getTime() - 1_000) }));
+
+    for (let i = 0; i < 6; i++) {
+      // Well past the failure limit — the terminal event keeps retrying.
+      await tick(h.deps, (await h.store.get(job.id))!);
+    }
+    expect((await h.store.get(job.id))!.status).toBe('active');
+    expect(h.events).toHaveLength(0);
+
+    coreUp = true;
+    await tick(h.deps, (await h.store.get(job.id))!);
+    expect((await h.store.get(job.id))!.status).toBe('expired');
+    expect(h.events.map((e) => e.kind)).toEqual(['poll.expired']);
+  });
 });
 
 describe('runDueOnce claiming', () => {
