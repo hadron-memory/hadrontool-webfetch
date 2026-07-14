@@ -1,4 +1,5 @@
-# hadrontool-webfetch — stateless web fetch/request capability tool.
+# hadrontool-webfetch — web fetch/request capability tool (stateless ops
+# plane + the stateful polling plane, spec cor:web:030).
 #
 # Built by Komodo from this repo's `main`, pushed to GHCR, deployed on the
 # `komodo_default` network as an INTERNAL-ONLY service: no Traefik router, no
@@ -25,11 +26,15 @@ ENV NODE_ENV=production \
 # deps. --include=dev is required because NODE_ENV=production (set above)
 # would otherwise make `npm ci` skip devDependencies (typescript/tsx) and the
 # build would fail with `tsc: not found`.
+# prisma/ must be present before `npm ci`: postinstall runs `prisma generate`.
 COPY package.json package-lock.json ./
+COPY prisma ./prisma
 RUN npm ci --include=dev
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
-RUN npm run build && npm prune --omit=dev
+# Re-generate after prune: `npm prune` can drop the generated client under
+# node_modules/.prisma (the prisma CLI is a prod dep so it survives the prune).
+RUN npm run build && npm prune --omit=dev && npx prisma generate
 
 RUN chown -R node:node /app
 USER node
