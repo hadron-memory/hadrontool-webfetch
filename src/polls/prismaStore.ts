@@ -87,7 +87,9 @@ export class PrismaPollStore implements PollStore {
     // Serialize per-org creations with a transaction-scoped advisory lock so
     // concurrent requests (or replicas) can't both pass the count check.
     return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${job.orgId}))`;
+      // Wrapped in a subquery: the lock function returns `void`, which
+      // Prisma's $queryRaw cannot deserialize as a result column.
+      await tx.$queryRaw`SELECT 1 AS locked FROM (SELECT pg_advisory_xact_lock(hashtext(${job.orgId}))) AS l`;
       const active = await tx.webFetchPollJob.count({ where: { orgId: job.orgId, status: 'active' } });
       if (active >= maxActive) return null;
       const row = await tx.webFetchPollJob.create({ data: toCreateData(job) });
