@@ -1,7 +1,7 @@
 {
   "name": "@hadron/hadrontool-webfetch",
   "version": "0.1.0",
-  "description": "Hadron webfetch tool — stateless microservice that fetches web pages and calls HTTP APIs behind an SSRF-guarded, connection-pinned egress policy.",
+  "description": "Hadron webfetch tool \u2014 stateless microservice that fetches web pages and calls HTTP APIs behind an SSRF-guarded, connection-pinned egress policy.",
   "type": "module",
   "main": "dist/index.js",
   "engines": {
@@ -14,9 +14,12 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "postinstall": "prisma generate",
+    "db:push": "prisma db push"
   },
   "dependencies": {
+    "@prisma/client": "^6.19.3",
     "cheerio": "^1.2.0",
     "dotenv": "^17.3.1",
     "express": "^4.21.0",
@@ -33,6 +36,7 @@
     "@types/supertest": "^6.0.2",
     "@types/turndown": "^5.0.6",
     "@vitest/coverage-v8": "^4.0.18",
+    "prisma": "^6.19.3",
     "supertest": "^7.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
