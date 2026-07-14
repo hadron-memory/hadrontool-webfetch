@@ -316,6 +316,8 @@ const evaluateUrlSchema = z
  * through the full guard, evaluate the condition set, and return the
  * snapshot the caller feeds back as `baseline` next time. The (future)
  * polling plane's scheduler calls the same evaluateConditions internally.
+ * Spec: cor:web:030:01 (lifecycle/condition semantics; the plane itself is
+ * cor:web:030:00..03).
  */
 const evaluateUrl = defineOp(evaluateUrlSchema, async (deps, input) => {
   validateConditions(input.conditions);

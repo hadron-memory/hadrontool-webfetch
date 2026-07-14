@@ -13,6 +13,7 @@
  * First-tick rule: a `changed`-type condition with no baseline entry does
  * NOT match — it records its snapshot value instead. Absolute conditions
  * evaluate normally on the first tick (already-true is a legitimate match).
+ * Spec: cor:web:030:01 (poll job lifecycle — first-observation rule).
  *
  * `regex` is a ReDoS surface: contained by the pattern-length cap plus the
  * fact that callers are core-governed agents, not anonymous (issue #4).
