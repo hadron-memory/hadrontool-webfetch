@@ -1,0 +1,51 @@
+// The polling plane's job store — the ONE stateful surface of this tool
+// (spec cor:web:030:00: state is scoped to polling; /ops stays stateless).
+// Design: hadrontool-webfetch#4.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model WebFetchPollJob {
+  id                  String    @id @default(uuid())
+  orgId               String
+  appId               String?
+  url                 String
+  contentKind         String // html | json | auto
+  conditions          Json
+  mode                String // any | all
+  headersJson         Json?
+  intervalSeconds     Int
+  expiresAt           DateTime
+  firePolicy          String // once | every_change | cooldown
+  cooldownSeconds     Int?
+  /// AES-256-GCM (keyId:iv:tag:ciphertext, base64 parts); null = anonymous poll.
+  /// Decrypted ONLY in the tick path. Spec: cor:web:030:02.
+  authCiphertext      String?
+  authKeyId           String?
+  /// Audit provenance only — core enforces the urlPrefix binding at creation.
+  credentialsNodeUrn  String?
+  urlPrefix           String?
+  baselineHash        String?
+  baselineValues      Json?
+  lastNotifiedHash    String?
+  lastStatus          Int?
+  lastCheckedAt       DateTime?
+  lastTriggeredAt     DateTime?
+  triggerCount        Int       @default(0)
+  consecutiveFailures Int       @default(0)
+  nextRunAt           DateTime
+  /// Scheduler claim lease — a second replica is safe by construction.
+  leaseUntil          DateTime?
+  status              String // active | done | expired | failed | cancelled
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([status, nextRunAt])
+  @@index([orgId, status])
+}
