@@ -72,9 +72,9 @@ describe('POST /polls', () => {
       ...CREATE,
       auth: { type: 'bearer', token: 'super-sekrit' },
     }).expect(201);
-    expect(res.body.job.jobId).toBeTruthy();
-    expect(res.body.job.status).toBe('active');
-    expect(res.body.job.hasCredential).toBe(true);
+    expect(res.body.jobId).toBeTruthy();
+    expect(res.body.status).toBe('active');
+    expect(res.body.hasCredential).toBe(true);
     expect(JSON.stringify(res.body)).not.toContain('super-sekrit');
   });
 
@@ -132,26 +132,26 @@ describe('read, cancel, run', () => {
   it('cancel disposes of the stored credential', async () => {
     const { app, store } = pollsApp();
     const created = await post(app, '/polls', { ...CREATE, auth: { type: 'bearer', token: 't0k' } }).expect(201);
-    const id = created.body.job.jobId;
+    const id = created.body.jobId;
     expect((await store.get(id))!.authCiphertext).not.toBeNull();
     const res = await request(app).delete(`/polls/${id}`).set('authorization', `Bearer ${TOKEN}`).expect(200);
-    expect(res.body.job.status).toBe('cancelled');
+    expect(res.body.status).toBe('cancelled');
     expect((await store.get(id))!.authCiphertext).toBeNull();
   });
 
   it('POST /polls/:id/run forces a tick on the scheduler code path', async () => {
     const { app } = pollsApp();
     const created = await post(app, '/polls', CREATE).expect(201);
-    const id = created.body.job.jobId;
+    const id = created.body.jobId;
     const res = await post(app, `/polls/${id}/run`).expect(200);
-    expect(res.body.job.lastCheckedAt).not.toBeNull();
-    expect(res.body.job.lastStatus).toBe(200);
+    expect(res.body.lastCheckedAt).not.toBeNull();
+    expect(res.body.lastStatus).toBe(200);
   });
 
   it('POST /polls/:id/run 409s while the scheduler holds the lease', async () => {
     const { app, store } = pollsApp();
     const created = await post(app, '/polls', CREATE).expect(201);
-    const id = created.body.job.jobId;
+    const id = created.body.jobId;
     await store.update(id, { leaseUntil: new Date('2026-07-14T12:00:30Z') }); // scheduler mid-tick
     const res = await post(app, `/polls/${id}/run`).expect(409);
     expect(res.body.error).toBe('poll_leased');
