@@ -97,7 +97,13 @@ export function pollsRouter(service: PollServiceDeps, scheduler: SchedulerDeps):
       }
       await tick(scheduler, claimed);
       const after = await service.store.get(req.params.id);
-      res.json({ ok: true, ...(after ? toView(after) : {}) });
+      if (!after) {
+        // The store seam permits concurrent deletion; a bare {ok} would break
+        // the flat-view contract, so surface it.
+        res.status(404).json({ error: 'not_found', message: 'Poll job disappeared during the tick.' });
+        return;
+      }
+      res.json({ ok: true, ...toView(after) });
     } catch (err) {
       respondWithError(res, err, 'run');
     }
