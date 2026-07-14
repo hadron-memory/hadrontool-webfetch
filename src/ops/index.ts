@@ -80,9 +80,9 @@ const FORBIDDEN_REQUEST_HEADERS = new Set([
 const CREDENTIAL_HEADERS = new Set(['authorization', 'cookie']);
 
 /** fetch-url only allows content-negotiation headers. */
-const FETCH_URL_HEADER_ALLOWLIST = new Set(['accept', 'accept-language']);
+export const FETCH_URL_HEADER_ALLOWLIST = new Set(['accept', 'accept-language']);
 
-const authSchema: z.ZodType<AuthSpec> = z.discriminatedUnion('type', [
+export const authSchema: z.ZodType<AuthSpec> = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('bearer'),
@@ -109,7 +109,7 @@ const authSchema: z.ZodType<AuthSpec> = z.discriminatedUnion('type', [
 ]);
 
 /** Lowercase keys + reject structural/credential headers. */
-function normalizeHeaders(
+export function normalizeHeaders(
   headers: Record<string, string> | undefined,
   allowlist?: Set<string>,
 ): Record<string, string> | undefined {

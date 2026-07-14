@@ -4,14 +4,19 @@ import { logger } from './logger.js';
 import { requireAuth } from './middleware/auth.js';
 import { healthRouter } from './routes/health.js';
 import { opsRouter } from './routes/ops.js';
+import { pollsRouter } from './routes/polls.js';
 import { OPERATIONS } from './ops/index.js';
 import { defaultDeps, type FetcherDeps } from './fetcher.js';
+import type { PollServiceDeps } from './polls/service.js';
+import type { SchedulerDeps } from './polls/scheduler.js';
 
 export interface AppOptions {
   /** Injectable fetch seams — tests pass fakes; production uses defaults. */
   fetcherDeps?: FetcherDeps;
   /** Override the bearer token (tests); defaults to config. */
   serviceToken?: string;
+  /** Polling plane (spec cor:web:030) — mounted only when provided. */
+  polls?: { service: PollServiceDeps; scheduler: SchedulerDeps };
 }
 
 /**
@@ -33,6 +38,10 @@ export function createApp(options: AppOptions = {}): Express {
   });
 
   app.use('/ops', auth, opsRouter(options.fetcherDeps ?? defaultDeps));
+
+  if (options.polls) {
+    app.use('/polls', auth, pollsRouter(options.polls.service, options.polls.scheduler));
+  }
 
   app.use((_req, res) => {
     res.status(404).json({ error: 'not_found' });
