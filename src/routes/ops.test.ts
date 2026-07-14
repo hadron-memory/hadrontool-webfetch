@@ -47,7 +47,7 @@ describe('auth gate', () => {
   it('accepts the bearer and lists operations on /info', async () => {
     const { app: a } = app(() => html(PAGE));
     const res = await request(a).get('/info').set('authorization', `Bearer ${TOKEN}`).expect(200);
-    expect(res.body.operations).toEqual(['fetch-url', 'check-url', 'http-request']);
+    expect(res.body.operations).toEqual(['fetch-url', 'check-url', 'http-request', 'evaluate-url']);
   });
 });
 
@@ -273,5 +273,91 @@ describe('unknown operation', () => {
       .expect(404);
     expect(res.body.error).toBe('unknown_operation');
     expect(res.body.operations).toContain('fetch-url');
+  });
+});
+
+describe('POST /ops/evaluate-url', () => {
+  const SHOP = '<html><body><span id="price">$ 129.00</span></body></html>';
+  const post = (a: ReturnType<typeof app>['app'], body: Record<string, unknown>) =>
+    request(a).post('/ops/evaluate-url').set('authorization', `Bearer ${TOKEN}`).send(body);
+
+  it('evaluates HTML conditions and returns the snapshot + external tag', async () => {
+    const { app: a } = app(() => html(SHOP));
+    const res = await post(a, {
+      url: 'https://shop.example/widget',
+      conditions: [{ id: 'p', type: 'selector_text', selector: '#price', op: 'contains', value: '129' }],
+    }).expect(200);
+    expect(res.body.triggered).toBe(true);
+    expect(res.body.results).toEqual([{ id: 'p', matched: true, actual: '$ 129.00' }]);
+    expect(res.body.snapshot.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(res.body.source).toBe('external');
+  });
+
+  it('round-trips the snapshot as baseline for changed conditions (the tick contract)', async () => {
+    const { app: a } = app(() => html(SHOP));
+    const conditions = [{ id: 'p', type: 'selector_text', selector: '#price', op: 'changed' }];
+    const first = await post(a, { url: 'https://shop.example/w', conditions }).expect(200);
+    expect(first.body.triggered).toBe(false); // first tick records, never fires
+
+    const same = await post(a, {
+      url: 'https://shop.example/w',
+      conditions,
+      baseline: first.body.snapshot,
+    }).expect(200);
+    expect(same.body.triggered).toBe(false);
+
+    const { app: b } = app(() => html('<html><body><span id="price">$ 99.00</span></body></html>'));
+    const moved = await post(b, {
+      url: 'https://shop.example/w',
+      conditions,
+      baseline: first.body.snapshot,
+    }).expect(200);
+    expect(moved.body.triggered).toBe(true);
+  });
+
+  it('auto-detects JSON and applies json_path rules', async () => {
+    const { app: a } = app(
+      () =>
+        new Response('{"stock":{"count":7}}', {
+          headers: { 'content-type': 'application/json' },
+        }) as unknown as HopResponse,
+    );
+    const res = await post(a, {
+      url: 'https://api.example.com/stock',
+      conditions: [{ id: 's', type: 'json_path', path: 'stock.count', op: 'gt', value: 5 }],
+    }).expect(200);
+    expect(res.body.triggered).toBe(true);
+    expect(res.body.results[0].actual).toBe('7');
+  });
+
+  it('415s when json conditions meet non-JSON content', async () => {
+    const { app: a } = app(() => html(SHOP));
+    const res = await post(a, {
+      url: 'https://shop.example/w',
+      conditions: [{ id: 's', type: 'json_path', path: 'a', op: 'exists' }],
+    }).expect(415);
+    expect(res.body.error).toBe('unsupported_content_type');
+  });
+
+  it('rejects invalid condition sets as validation_error', async () => {
+    const { app: a } = app(() => html(SHOP));
+    const res = await post(a, {
+      url: 'https://shop.example/w',
+      conditions: [
+        { id: 'dup', type: 'content_changed' },
+        { id: 'dup', type: 'text_contains', value: 'x' },
+      ],
+    }).expect(400);
+    expect(res.body.error).toBe('validation_error');
+    expect(res.body.field).toBe('conditions.dup');
+  });
+
+  it('runs the egress guard like every other op', async () => {
+    const { app: a } = app(() => html(SHOP), { 'internal.example': ['10.0.0.5'] });
+    const res = await post(a, {
+      url: 'https://internal.example/',
+      conditions: [{ id: 'c', type: 'content_changed' }],
+    }).expect(403);
+    expect(res.body.error).toBe('url_forbidden');
   });
 });

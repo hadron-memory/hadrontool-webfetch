@@ -9,7 +9,9 @@
  *
  * v1 operations: fetch-url (GET a page, normalized), check-url (HEAD probe),
  * http-request (API calls, any method — anonymous POST allowed by design;
- * ALL authorization happens in core before a request reaches this tool).
+ * ALL authorization happens in core before a request reaches this tool),
+ * evaluate-url (GET + condition evaluation — the polling tick primitive,
+ * exposed statelessly; issue #4).
  *
  * Every response envelope carries `source: "external"` where content from
  * the fetched resource is included — fetched content is untrusted input to
@@ -20,7 +22,7 @@
  */
 
 import { z } from 'zod';
-import { ValidationError } from '../errors.js';
+import { UnsupportedContentTypeError, ValidationError } from '../errors.js';
 import {
   DEFAULT_MAX_BYTES,
   HARD_MAX_BYTES,
@@ -29,6 +31,15 @@ import {
   type FetcherDeps,
 } from '../fetcher.js';
 import { extractLinks, extractTitle, htmlToMarkdown, htmlToText, sanitizePage } from '../convert.js';
+import {
+  baselineSchema,
+  conditionsSchema,
+  evaluateConditions,
+  modeSchema,
+  requiredKind,
+  validateConditions,
+  type ContentKind,
+} from '../evaluate.js';
 
 const HEADER_NAME_RE = /^[A-Za-z0-9-]{1,64}$/;
 const MAX_HEADER_VALUE_CHARS = 4_096;
@@ -285,10 +296,83 @@ const httpRequest = defineOp(httpRequestSchema, async (deps, input) => {
   };
 });
 
+const JSON_TYPES = (ct: string) => ct === 'application/json' || ct.endsWith('+json');
+
+const evaluateUrlSchema = z
+  .object({
+    url: urlSchema,
+    contentKind: z.enum(['auto', 'html', 'json']).default('auto'),
+    conditions: conditionsSchema,
+    mode: modeSchema,
+    baseline: baselineSchema.optional(),
+    headers: headersSchema,
+    auth: authSchema.optional(),
+    maxBytes: maxBytesSchema,
+  })
+  .strict();
+
+/**
+ * The polling tick primitive, exposed statelessly (issue #4): GET the URL
+ * through the full guard, evaluate the condition set, and return the
+ * snapshot the caller feeds back as `baseline` next time. The (future)
+ * polling plane's scheduler calls the same evaluateConditions internally.
+ * Spec: cor:web:030:01 (lifecycle/condition semantics; the plane itself is
+ * cor:web:030:00..03).
+ */
+const evaluateUrl = defineOp(evaluateUrlSchema, async (deps, input) => {
+  validateConditions(input.conditions);
+  const outcome = await performFetch(
+    {
+      method: 'GET',
+      url: input.url,
+      headers: normalizeHeaders(input.headers, FETCH_URL_HEADER_ALLOWLIST),
+      auth: input.auth,
+      maxBytes: input.maxBytes ?? DEFAULT_MAX_BYTES,
+      followRedirects: true,
+    },
+    deps,
+  );
+  const ct = outcome.contentType ?? '';
+  let kind: ContentKind;
+  if (input.contentKind !== 'auto') {
+    // Explicit kind wins; a conflict with the conditions is the caller's
+    // input error (evaluateConditions raises validation_error).
+    kind = input.contentKind;
+  } else {
+    // Auto: kind-agnostic conditions treat any non-JSON textual body as a
+    // page; a kind the conditions force but the content can't satisfy is a
+    // content mismatch (415), not an input error — a poll tick counts it
+    // toward backoff like any other fetch-shaped failure.
+    kind = JSON_TYPES(ct) ? 'json' : 'html';
+    const forced = requiredKind(input.conditions);
+    if (forced !== undefined && forced !== kind) {
+      throw new UnsupportedContentTypeError(ct || 'unknown');
+    }
+  }
+  const evaluation = evaluateConditions({
+    conditions: input.conditions,
+    mode: input.mode,
+    kind,
+    bodyText: outcome.bodyText ?? '',
+    baseline: input.baseline,
+  });
+  return {
+    triggered: evaluation.triggered,
+    results: evaluation.results,
+    snapshot: evaluation.snapshot,
+    finalUrl: outcome.finalUrl,
+    status: outcome.status,
+    contentType: outcome.contentType,
+    truncated: outcome.truncated,
+    source: 'external' as const,
+  };
+});
+
 export const OPERATIONS: Record<string, OperationDef> = {
   'fetch-url': fetchUrl,
   'check-url': checkUrl,
   'http-request': httpRequest,
+  'evaluate-url': evaluateUrl,
 };
 
 export async function runOperation(deps: FetcherDeps, name: string, input: Record<string, unknown>): Promise<unknown> {
