@@ -31,7 +31,7 @@ export function pollsRouter(service: PollServiceDeps, scheduler: SchedulerDeps):
   router.post('/', async (req, res) => {
     try {
       const view = await createPoll(service, (req.body ?? {}) as Record<string, unknown>);
-      res.status(201).json({ ok: true, job: view });
+      res.status(201).json({ ok: true, ...view });
     } catch (err) {
       respondWithError(res, err, 'create');
     }
@@ -58,7 +58,7 @@ export function pollsRouter(service: PollServiceDeps, scheduler: SchedulerDeps):
         res.status(404).json({ error: 'not_found', message: 'No such poll job.' });
         return;
       }
-      res.json({ ok: true, job: toView(job) });
+      res.json({ ok: true, ...toView(job) });
     } catch (err) {
       respondWithError(res, err, 'get');
     }
@@ -71,7 +71,7 @@ export function pollsRouter(service: PollServiceDeps, scheduler: SchedulerDeps):
         res.status(404).json({ error: 'not_found', message: 'No such poll job.' });
         return;
       }
-      res.json({ ok: true, job: view });
+      res.json({ ok: true, ...view });
     } catch (err) {
       respondWithError(res, err, 'cancel');
     }
@@ -97,7 +97,13 @@ export function pollsRouter(service: PollServiceDeps, scheduler: SchedulerDeps):
       }
       await tick(scheduler, claimed);
       const after = await service.store.get(req.params.id);
-      res.json({ ok: true, job: after ? toView(after) : null });
+      if (!after) {
+        // The store seam permits concurrent deletion; a bare {ok} would break
+        // the flat-view contract, so surface it.
+        res.status(404).json({ error: 'not_found', message: 'Poll job disappeared during the tick.' });
+        return;
+      }
+      res.json({ ok: true, ...toView(after) });
     } catch (err) {
       respondWithError(res, err, 'run');
     }
