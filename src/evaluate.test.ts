@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { ValidationError } from './errors.js';
+import { FetchFailedError, ValidationError } from './errors.js';
 import { evaluateConditions, validateConditions, requiredKind, type Condition } from './evaluate.js';
 
 const PAGE = `<html><body>
@@ -65,17 +65,59 @@ describe('HTML conditions', () => {
     expect(changed.triggered).toBe(true);
   });
 
-  it('selector_text changed: first tick records the value without matching', () => {
+  it('selector_text changed: first tick records a digest without matching', () => {
     const cond: Condition[] = [{ id: 'p', type: 'selector_text', selector: '#price', op: 'changed' }];
     const first = evalHtml(cond);
     expect(first.results[0].matched).toBe(false);
-    expect(first.snapshot.values).toEqual({ p: '$ 129.00' });
+    expect(first.snapshot.values.p).toMatch(/^sha256:[0-9a-f]{64}$/);
 
-    const same = evalHtml(cond, { baseline: { values: { p: '$ 129.00' } } });
+    const same = evalHtml(cond, { baseline: { values: first.snapshot.values } });
     expect(same.triggered).toBe(false);
 
-    const moved = evalHtml(cond, { baseline: { values: { p: '$ 149.00' } } });
+    const moved = evalHtml(cond, { baseline: { values: { p: 'sha256:previous-digest' } } });
     expect(moved.triggered).toBe(true);
+  });
+
+  it('changed fires on disappearance and appearance (absence is a state)', () => {
+    const cond: Condition[] = [{ id: 'p', type: 'selector_text', selector: '#price', op: 'changed' }];
+    const present = evalHtml(cond);
+
+    // value → missing fires
+    const gone = evaluateConditions({
+      conditions: cond,
+      mode: 'any',
+      kind: 'html',
+      bodyText: '<html><body>no price here</body></html>',
+      baseline: { values: present.snapshot.values },
+    });
+    expect(gone.triggered).toBe(true);
+    expect(gone.snapshot.values).toEqual({ p: 'absent' });
+
+    // missing → missing does not fire; missing → value fires
+    const stillGone = evaluateConditions({
+      conditions: cond,
+      mode: 'any',
+      kind: 'html',
+      bodyText: '<html><body>still none</body></html>',
+      baseline: { values: gone.snapshot.values },
+    });
+    expect(stillGone.triggered).toBe(false);
+    const appeared = evalHtml(cond, { baseline: { values: gone.snapshot.values } });
+    expect(appeared.triggered).toBe(true);
+  });
+
+  it('changed compares the full value, beyond the actual-echo cap', () => {
+    const long = (tail: string) => `<html><body><div id="p">${'x'.repeat(600)}${tail}</div></body></html>`;
+    const cond: Condition[] = [{ id: 'p', type: 'selector_text', selector: '#p', op: 'changed' }];
+    const a = evaluateConditions({ conditions: cond, mode: 'any', kind: 'html', bodyText: long('AAA') });
+    const b = evaluateConditions({
+      conditions: cond,
+      mode: 'any',
+      kind: 'html',
+      bodyText: long('BBB'), // differs only after the 500-char echo cap
+      baseline: { values: a.snapshot.values },
+    });
+    expect(b.triggered).toBe(true);
   });
 });
 
@@ -106,16 +148,40 @@ describe('JSON conditions', () => {
     expect(out.results[0]).toEqual({ id: 'ne', matched: false, actual: null });
   });
 
-  it('changed uses the recorded per-condition value', () => {
+  it('changed uses the recorded per-condition digest', () => {
     const cond: Condition[] = [{ id: 'n', type: 'json_path', path: 'count', op: 'changed' }];
     const first = evalJson(DOC, cond);
     expect(first.triggered).toBe(false);
-    expect(first.snapshot.values).toEqual({ n: '3' });
+    expect(first.snapshot.values.n).toMatch(/^sha256:/);
     const bumped = evalJson({ ...DOC, count: 4 }, cond, { values: first.snapshot.values });
     expect(bumped.triggered).toBe(true);
   });
 
-  it('rejects a body that is not valid JSON', () => {
+  it('prototype members are not reachable through paths (own properties only)', () => {
+    const out = evalJson(DOC, [
+      { id: 'a', type: 'json_path', path: 'constructor', op: 'exists' },
+      { id: 'b', type: 'json_path', path: 'items.toString', op: 'exists' },
+      { id: 'c', type: 'json_path', path: 'status.length', op: 'changed' },
+    ]);
+    expect(out.results.map((r) => r.matched)).toEqual([false, false, false]);
+    expect(out.results[0].actual).toBeNull();
+  });
+
+  it('content_changed hashes the canonical JSON — reformatting is not a change', () => {
+    const cond: Condition[] = [{ id: 'w', type: 'content_changed' }];
+    const minified = evaluateConditions({ conditions: cond, mode: 'any', kind: 'json', bodyText: '{"a":1,"b":[2]}' });
+    const pretty = evaluateConditions({
+      conditions: cond,
+      mode: 'any',
+      kind: 'json',
+      bodyText: '{\n  "a": 1,\n  "b": [ 2 ]\n}',
+      baseline: { hash: minified.snapshot.hash },
+    });
+    expect(pretty.triggered).toBe(false);
+    expect(pretty.snapshot.hash).toBe(minified.snapshot.hash);
+  });
+
+  it('surfaces a malformed JSON body as a fetch-shaped failure, not a caller error', () => {
     expect(() =>
       evaluateConditions({
         conditions: [{ id: 'x', type: 'json_path', path: 'a', op: 'exists' }],
@@ -123,7 +189,7 @@ describe('JSON conditions', () => {
         kind: 'json',
         bodyText: '<html>not json</html>',
       }),
-    ).toThrow(ValidationError);
+    ).toThrow(FetchFailedError);
   });
 });
 

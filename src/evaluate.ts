@@ -13,7 +13,10 @@
  * First-tick rule: a `changed`-type condition with no baseline entry does
  * NOT match — it records its snapshot value instead. Absolute conditions
  * evaluate normally on the first tick (already-true is a legitimate match).
- * Spec: cor:web:030:01 (poll job lifecycle — first-observation rule).
+ * Absence is an observed state: a watched element/value appearing or
+ * disappearing counts as a change. Baseline entries are full-value digests
+ * ("absent" | "sha256:…"), so a change past the `actual` echo cap still
+ * fires. Spec: cor:web:030:01 (poll job lifecycle — first-observation rule).
  *
  * `regex` is a ReDoS surface: contained by the pattern-length cap plus the
  * fact that callers are core-governed agents, not anonymous (issue #4).
@@ -22,7 +25,7 @@
 import { createHash } from 'node:crypto';
 import * as cheerio from 'cheerio';
 import { z } from 'zod';
-import { ValidationError } from './errors.js';
+import { FetchFailedError, ValidationError } from './errors.js';
 import { htmlToText } from './convert.js';
 
 export const MAX_CONDITIONS = 10;
@@ -161,15 +164,28 @@ function resolvePath(root: unknown, segments: (string | number)[]): unknown {
   let cur: unknown = root;
   for (const seg of segments) {
     if (cur === null || typeof cur !== 'object') return undefined;
+    // Own properties only — a path like "constructor" or "toString" must be
+    // "not found", never a prototype member (crash + prototype-probe vector).
+    if (!Object.prototype.hasOwnProperty.call(cur, seg)) return undefined;
     cur = (cur as Record<string | number, unknown>)[seg];
   }
   return cur;
 }
 
-/** Stable string form used for `changed` baselines and `actual` echoes. */
-function snapshotValue(v: unknown): string {
-  const s = typeof v === 'string' ? v : v === undefined ? '' : JSON.stringify(v);
-  return s.slice(0, MAX_SNAPSHOT_VALUE_CHARS);
+/** Full string form of an observed value; null = absent (absence is a state). */
+function observedValue(v: unknown): string | null {
+  if (v === undefined) return null;
+  if (typeof v === 'string') return v;
+  return JSON.stringify(v) ?? '';
+}
+
+/**
+ * Baseline entry for `changed` detection: absence is recorded explicitly and
+ * present values compare by FULL-value digest — so a change beyond the
+ * `actual` echo cap still fires, and value↔missing transitions count.
+ */
+function baselineEntry(full: string | null): string {
+  return full === null ? 'absent' : `sha256:${createHash('sha256').update(full).digest('hex')}`;
 }
 
 function jsonEquals(a: unknown, b: unknown): boolean {
@@ -207,6 +223,9 @@ export interface EvaluateInput {
  */
 export function evaluateConditions(input: EvaluateInput): EvaluationOutcome {
   const { conditions, mode, kind, bodyText, baseline } = input;
+  // Self-protecting: callers (the op validates pre-fetch, the future
+  // scheduler may not) all get the same cross-field guarantees.
+  validateConditions(conditions);
   const forced = requiredKind(conditions);
   if (forced !== undefined && forced !== kind) {
     throw new ValidationError('conditions', `these conditions require ${forced} content, got ${kind}`);
@@ -226,9 +245,13 @@ export function evaluateConditions(input: EvaluateInput): EvaluationOutcome {
     try {
       json = JSON.parse(bodyText);
     } catch {
-      throw new ValidationError('content', 'the response body is not valid JSON');
+      // A remote body that fails its own content type is a fetch-shaped
+      // failure (a poll tick backs off on it), not a caller-input error.
+      throw new FetchFailedError('the response body is not valid JSON');
     }
-    pageText = bodyText;
+    // Hash/search the canonical serialization, not the raw text — reformatted
+    // (pretty↔minified) but semantically identical JSON is not a change.
+    pageText = JSON.stringify(json) ?? '';
   }
   const hash = createHash('sha256').update(pageText).digest('hex');
 
@@ -244,14 +267,16 @@ export function evaluateConditions(input: EvaluateInput): EvaluationOutcome {
         break;
       case 'selector_text': {
         const el = select($!, c.id, c.selector).first();
-        actual = el.length > 0 ? snapshotValue(el.text().replace(/\s+/g, ' ').trim()) : null;
+        const full = el.length > 0 ? el.text().replace(/\s+/g, ' ').trim() : null;
+        actual = full === null ? null : full.slice(0, MAX_SNAPSHOT_VALUE_CHARS);
         if (c.op === 'changed') {
-          if (actual != null) values[c.id] = actual;
-          matched = changedAgainstBaseline(baseline, c.id, actual);
-        } else if (actual != null) {
-          if (c.op === 'contains') matched = actual.includes(c.value as string);
-          else if (c.op === 'equals') matched = actual === c.value;
-          else matched = compileRegex(c.id, c.value as string).test(actual);
+          const entry = baselineEntry(full);
+          values[c.id] = entry;
+          matched = changedAgainstBaseline(baseline, c.id, entry);
+        } else if (full !== null) {
+          if (c.op === 'contains') matched = full.includes(c.value as string);
+          else if (c.op === 'equals') matched = full === c.value;
+          else matched = compileRegex(c.id, c.value as string).test(full);
         }
         break;
       }
@@ -263,11 +288,13 @@ export function evaluateConditions(input: EvaluateInput): EvaluationOutcome {
         break;
       case 'json_path': {
         const v = resolvePath(json, parsePath(c.id, c.path));
-        actual = v === undefined ? null : snapshotValue(v);
+        const full = observedValue(v);
+        actual = full === null ? null : full.slice(0, MAX_SNAPSHOT_VALUE_CHARS);
         if (c.op === 'exists') matched = v !== undefined;
         else if (c.op === 'changed') {
-          if (actual != null) values[c.id] = actual;
-          matched = changedAgainstBaseline(baseline, c.id, actual);
+          const entry = baselineEntry(full);
+          values[c.id] = entry;
+          matched = changedAgainstBaseline(baseline, c.id, entry);
         } else if (v !== undefined) {
           if (c.op === 'eq') matched = jsonEquals(v, c.value);
           else if (c.op === 'ne') matched = !jsonEquals(v, c.value);
@@ -297,9 +324,9 @@ export function evaluateConditions(input: EvaluateInput): EvaluationOutcome {
 }
 
 /** First-tick rule: no baseline entry → record, don't match. */
-function changedAgainstBaseline(baseline: Baseline | undefined, id: string, actual: string | null): boolean {
+function changedAgainstBaseline(baseline: Baseline | undefined, id: string, entry: string): boolean {
   const prev = baseline?.values?.[id];
-  return prev !== undefined && actual !== null && prev !== actual;
+  return prev !== undefined && prev !== entry;
 }
 
 function select($: cheerio.CheerioAPI, id: string, selector: string): ReturnType<cheerio.CheerioAPI> {
