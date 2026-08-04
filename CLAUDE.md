@@ -63,8 +63,8 @@ No database, no Prisma, no migrations — nothing to set up.
 
 This tool has no memory of its own — work against the shared ones:
 
-- `hrn:memory:hadronmemory.com::dev` — findings, conventions, ops, `preflight`
-- `hrn:memory:hadronmemory.com::specs` — product specs (`cor:api:130:02` is
+- `hrn:mem:hadronmemory.com:dev` — findings, conventions, ops, `preflight`
+- `hrn:mem:hadronmemory.com:specs` — product specs (`cor:api:130:02` is
   the egress policy this tool implements and hardens)
 
 Query Hadron before reading code/design (`hadron_find_nodes` → `hadron_get_node`),
