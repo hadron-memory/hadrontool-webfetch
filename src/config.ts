@@ -40,7 +40,7 @@ if (isProduction && !env.WEBFETCH_TOOL_TOKEN) {
   process.exit(1);
 }
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 
 /** The polling plane boots only when its whole env quorum is present. */
 const pollingConfigured = Boolean(env.DATABASE_URL && env.TOKEN_ENCRYPTION_KEY && env.CORE_EVENTS_URL);

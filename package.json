@@ -1,6 +1,6 @@
 {
   "name": "@hadron/hadrontool-webfetch",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Hadron webfetch tool \u2014 SSRF-guarded, connection-pinned web fetch/request microservice: stateless one-shot ops plus a stateful polling plane (standing URL watches with events to core).",
   "type": "module",
   "main": "dist/index.js",
