@@ -62,6 +62,16 @@ describe('#10 redirects option', () => {
     expect(calls).toEqual([]);
   });
 
+  it.each([
+    ['json', [{ id: 'j', type: 'json_path', path: '$.a', op: 'exists' }]],
+    ['html', [{ id: 'p', type: 'selector_exists', selector: 'body' }]],
+  ])('evaluate-url none + 3xx with %s conditions returns the redirect unevaluated (no 415)', async (_k, conditions) => {
+    const { app, calls } = setup();
+    const res = await post(app, 'evaluate-url', { url: 'https://api.example/a', auth: AUTH, conditions, redirects: 'none' }).expect(200);
+    expect(res.body).toMatchObject({ triggered: false, results: [], snapshot: null, status: 302, redirectLocation: TARGET });
+    expect(calls.map((c) => c.url)).toEqual(['https://api.example/a']);
+  });
+
   it('check-url takes no redirects field', async () => {
     const { app, calls } = setup();
     const res = await post(app, 'check-url', { url: 'https://api.example/a', redirects: 'follow' }).expect(400);

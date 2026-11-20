@@ -352,6 +352,23 @@ const evaluateUrl = defineOp(evaluateUrlSchema, async (deps, input) => {
     },
     deps,
   );
+  // #10: an unfollowed 3xx is returned as-is, BEFORE any content evaluation (it has
+  // no body, and a json_path condition would otherwise 415 and hide the redirect).
+  // Nothing is evaluated: not triggered, no results, no snapshot (callers must not
+  // store this as a baseline).
+  if (input.redirects === 'none' && outcome.status >= 300 && outcome.status < 400) {
+    return {
+      triggered: false,
+      results: [],
+      snapshot: null,
+      finalUrl: outcome.finalUrl,
+      status: outcome.status,
+      contentType: outcome.contentType,
+      truncated: outcome.truncated,
+      source: 'external' as const,
+      ...redirectLocationField(input.redirects, outcome),
+    };
+  }
   const ct = outcome.contentType ?? '';
   let kind: ContentKind;
   if (input.contentKind !== 'auto') {
