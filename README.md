@@ -63,6 +63,19 @@ source}`. Non-GET requests **never follow redirects** — the 3xx is returned.
 The service is stateless, so there is no idempotency replay: **callers must
 not auto-retry non-GET requests**.
 
+### `redirects` — optional redirect control (`fetch-url`, `evaluate-url`, `http-request`)
+
+`"redirects": "follow" | "none"`, default `"follow"` (today's behavior). With
+`"none"` a 3xx is returned as-is and never followed, so a credential in `auth`
+goes to no second hop: the response carries the 3xx `status` and the `Location`
+(`redirectLocation` on `fetch-url` / `evaluate-url`, `headers.location` on
+`http-request`). On `evaluate-url` an unfollowed 3xx is returned before any
+condition runs: `triggered: false`, `results: []`, `snapshot: null` (do not store
+it as a baseline). `"follow"` never makes a non-GET follow (`http-request` follows
+only GET/HEAD). Any other value is a `validation_error`. `check-url` never
+follows and takes no field. The poll scheduler is out of scope (#11). Listed
+under `redirects` in `GET /info`. Spec: cor:web:010:02.
+
 ### Auth shapes
 
 ```json
@@ -95,7 +108,7 @@ response bodies are read streaming under a byte cap (truncate + flag, default
 ## Other endpoints
 
 - `GET /healthz`, `GET /readyz` — open; liveness/readiness.
-- `GET /info` — bearer-gated; name, version, operation list.
+- `GET /info` — bearer-gated; name, version, operation list, and the `redirects` option (ops, values, default).
 
 ## Development
 
