@@ -31,6 +31,7 @@ import {
   type FetcherDeps,
 } from '../fetcher.js';
 import { extractLinks, extractTitle, htmlToMarkdown, htmlToText, sanitizePage } from '../convert.js';
+import { SUPPORT } from '../contract.js';
 import {
   baselineSchema,
   conditionsSchema,
@@ -275,6 +276,11 @@ const httpRequest = defineOp(httpRequestSchema, async (deps, input) => {
   }
   if ((hasJson || hasBody) && (input.method === 'GET' || input.method === 'HEAD')) {
     throw new ValidationError('body', `a ${input.method} request cannot carry a body`);
+  }
+  // Fail closed: if this build ever stops honouring `none` (SUPPORT.redirectsNone, the switch GET /ops/contract reads),
+  // refuse the request rather than follow a redirect the caller asked not to follow.
+  if (input.redirects === 'none' && !SUPPORT.redirectsNone) {
+    throw new ValidationError('redirects', 'redirects "none" is not supported by this build');
   }
   const body = hasJson ? JSON.stringify(input.json) : input.body;
   const outcome = await performFetch(

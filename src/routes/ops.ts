@@ -12,6 +12,7 @@ import { ZodError } from 'zod';
 import { logger } from '../logger.js';
 import { WebfetchToolError, validationFromZod } from '../errors.js';
 import { OPERATIONS, runOperation } from '../ops/index.js';
+import { contractJson } from '../contract.js';
 import type { FetcherDeps } from '../fetcher.js';
 
 function respondWithError(res: Response, err: unknown, opName: string): void {
@@ -32,6 +33,11 @@ function respondWithError(res: Response, err: unknown, opName: string): void {
 /** Build the /ops router over injected fetcher deps (tests inject fakes). */
 export function opsRouter(deps: FetcherDeps): Router {
   const router = Router();
+
+  // #13: the declared contract. A pure read of constants: no body, no side effect, no outbound request.
+  router.get('/contract', (_req, res) => {
+    res.status(200).type('json').send(contractJson());
+  });
 
   router.post('/:operation', async (req, res) => {
     const name = req.params.operation;
