@@ -31,7 +31,7 @@ import {
   type FetcherDeps,
 } from '../fetcher.js';
 import { extractLinks, extractTitle, htmlToMarkdown, htmlToText, sanitizePage } from '../convert.js';
-import { HONOURS_REDIRECTS_NONE } from '../contract.js';
+import { SUPPORT } from '../contract.js';
 import {
   baselineSchema,
   conditionsSchema,
@@ -277,6 +277,11 @@ const httpRequest = defineOp(httpRequestSchema, async (deps, input) => {
   if ((hasJson || hasBody) && (input.method === 'GET' || input.method === 'HEAD')) {
     throw new ValidationError('body', `a ${input.method} request cannot carry a body`);
   }
+  // Fail closed: if this build ever stops honouring `none` (SUPPORT.redirectsNone, the switch GET /ops/contract reads),
+  // refuse the request rather than follow a redirect the caller asked not to follow.
+  if (input.redirects === 'none' && !SUPPORT.redirectsNone) {
+    throw new ValidationError('redirects', 'redirects "none" is not supported by this build');
+  }
   const body = hasJson ? JSON.stringify(input.json) : input.body;
   const outcome = await performFetch(
     {
@@ -291,9 +296,7 @@ const httpRequest = defineOp(httpRequestSchema, async (deps, input) => {
       // correctness trap and a leak vector — only safe methods follow.
       // Spec: cor:web:010:02 (non-GET never follows redirects).
       // `redirects: "follow"` never overrides this; `none` only narrows it (#10).
-      // `none` stops at the first hop only while HONOURS_REDIRECTS_NONE holds, the constant GET /ops/contract advertises.
-      followRedirects:
-        (input.redirects === 'follow' || !HONOURS_REDIRECTS_NONE) && (input.method === 'GET' || input.method === 'HEAD'),
+      followRedirects: input.redirects === 'follow' && (input.method === 'GET' || input.method === 'HEAD'),
     },
     deps,
   );
