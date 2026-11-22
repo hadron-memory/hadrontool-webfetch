@@ -5,7 +5,7 @@ import { requireAuth } from './middleware/auth.js';
 import { healthRouter } from './routes/health.js';
 import { opsRouter } from './routes/ops.js';
 import { pollsRouter } from './routes/polls.js';
-import { OPERATIONS } from './ops/index.js';
+import { OPERATIONS, REDIRECTS_OPS } from './ops/index.js';
 import { defaultDeps, type FetcherDeps } from './fetcher.js';
 import type { PollServiceDeps } from './polls/service.js';
 import type { SchedulerDeps } from './polls/scheduler.js';
@@ -34,7 +34,13 @@ export function createApp(options: AppOptions = {}): Express {
   const auth = requireAuth(options.serviceToken ?? config.serviceToken);
 
   app.get('/info', auth, (_req, res) => {
-    res.json({ name: 'hadrontool-webfetch', version: VERSION, operations: Object.keys(OPERATIONS) });
+    res.json({
+      name: 'hadrontool-webfetch',
+      version: VERSION,
+      operations: Object.keys(OPERATIONS),
+      // #10: the optional redirect control and the ops that take it.
+      redirects: { ops: [...REDIRECTS_OPS], values: ['follow', 'none'], default: 'follow' },
+    });
   });
 
   app.use('/ops', auth, opsRouter(options.fetcherDeps ?? defaultDeps));

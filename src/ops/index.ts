@@ -168,6 +168,21 @@ function defineOp<S extends z.ZodType>(
   };
 }
 
+/**
+ * #10 (cor:web:010:02): optional redirect control for the auth-taking ops that
+ * follow redirects. `none` returns a 3xx as-is and sends nothing to a second hop;
+ * `follow` (the default) is today's behavior and never makes a non-GET follow.
+ */
+const redirectsSchema = z.enum(['follow', 'none']).default('follow');
+export const REDIRECTS_OPS = ['fetch-url', 'evaluate-url', 'http-request'] as const;
+
+/** Set only when the caller asked for `none` and a 3xx came back, so default output is unchanged. */
+function redirectLocationField(redirects: 'follow' | 'none', outcome: { status: number; headers: Record<string, string> }) {
+  return redirects === 'none' && outcome.status >= 300 && outcome.status < 400
+    ? { redirectLocation: outcome.headers['location'] ?? null }
+    : {};
+}
+
 const HTML_TYPES = new Set(['text/html', 'application/xhtml+xml']);
 
 const fetchUrlSchema = z
@@ -177,6 +192,7 @@ const fetchUrlSchema = z
     maxBytes: maxBytesSchema,
     headers: headersSchema,
     auth: authSchema.optional(),
+    redirects: redirectsSchema,
   })
   .strict();
 
@@ -188,7 +204,7 @@ const fetchUrl = defineOp(fetchUrlSchema, async (deps, input) => {
       headers: normalizeHeaders(input.headers, FETCH_URL_HEADER_ALLOWLIST),
       auth: input.auth,
       maxBytes: input.maxBytes ?? DEFAULT_MAX_BYTES,
-      followRedirects: true,
+      followRedirects: input.redirects === 'follow',
     },
     deps,
   );
@@ -201,6 +217,7 @@ const fetchUrl = defineOp(fetchUrlSchema, async (deps, input) => {
     truncated: outcome.truncated,
     source: 'external' as const,
     ...(isHtml ? { title: extractTitle(raw) ?? null } : {}),
+    ...redirectLocationField(input.redirects, outcome),
   };
   switch (input.format) {
     case 'markdown':
@@ -246,6 +263,7 @@ const httpRequestSchema = z
     json: z.unknown().optional(),
     auth: authSchema.optional(),
     maxBytes: maxBytesSchema,
+    redirects: redirectsSchema,
   })
   .strict();
 
@@ -271,7 +289,8 @@ const httpRequest = defineOp(httpRequestSchema, async (deps, input) => {
       // Auto-replaying a body across a redirect hop is both a 307/303
       // correctness trap and a leak vector — only safe methods follow.
       // Spec: cor:web:010:02 (non-GET never follows redirects).
-      followRedirects: input.method === 'GET' || input.method === 'HEAD',
+      // `redirects: "follow"` never overrides this; `none` only narrows it (#10).
+      followRedirects: input.redirects === 'follow' && (input.method === 'GET' || input.method === 'HEAD'),
     },
     deps,
   );
@@ -308,6 +327,7 @@ const evaluateUrlSchema = z
     headers: headersSchema,
     auth: authSchema.optional(),
     maxBytes: maxBytesSchema,
+    redirects: redirectsSchema,
   })
   .strict();
 
@@ -328,10 +348,27 @@ const evaluateUrl = defineOp(evaluateUrlSchema, async (deps, input) => {
       headers: normalizeHeaders(input.headers, FETCH_URL_HEADER_ALLOWLIST),
       auth: input.auth,
       maxBytes: input.maxBytes ?? DEFAULT_MAX_BYTES,
-      followRedirects: true,
+      followRedirects: input.redirects === 'follow',
     },
     deps,
   );
+  // #10: an unfollowed 3xx is returned as-is, BEFORE any content evaluation (it has
+  // no body, and a json_path condition would otherwise 415 and hide the redirect).
+  // Nothing is evaluated: not triggered, no results, no snapshot (callers must not
+  // store this as a baseline).
+  if (input.redirects === 'none' && outcome.status >= 300 && outcome.status < 400) {
+    return {
+      triggered: false,
+      results: [],
+      snapshot: null,
+      finalUrl: outcome.finalUrl,
+      status: outcome.status,
+      contentType: outcome.contentType,
+      truncated: outcome.truncated,
+      source: 'external' as const,
+      ...redirectLocationField(input.redirects, outcome),
+    };
+  }
   const ct = outcome.contentType ?? '';
   let kind: ContentKind;
   if (input.contentKind !== 'auto') {
@@ -365,6 +402,7 @@ const evaluateUrl = defineOp(evaluateUrlSchema, async (deps, input) => {
     contentType: outcome.contentType,
     truncated: outcome.truncated,
     source: 'external' as const,
+    ...redirectLocationField(input.redirects, outcome),
   };
 });
 
